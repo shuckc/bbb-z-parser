@@ -3,21 +3,23 @@ import pycdlib
 from io import BytesIO
 import struct
 
-PAC_ENTRY = struct.Struct('<B12sLLLL')
+PAC_ENTRY = struct.Struct('<BLL12sHHL')
 def print_installer_pac(v: bytes):
-    p = 0x80
+    p = 0x80 - 8
     entrysz = 29
-
+    data_from = 99999999
     tsize = 0
     for i in range(400):
-        r = v[p+i*entrysz:p+(i+1)*entrysz]
-        edir,nameb,f1,sz,f2,f3 = PAC_ENTRY.unpack_from(r, 0)
+        r = v[p:p+entrysz]
+        flg,offset,typ,nameb,f1,f2,sz = PAC_ENTRY.unpack_from(r, 0)
         name = nameb.decode()
-        print(f"  {edir} {name:10} {sz:8} {f1:10} {f2:10}")
-        if f3 != 0:
-            break
+        if offset < data_from:
+            data_from = offset
+        print(f"  {flg} {offset:10} {typ:10} {name:10} {sz:8} {f1:6} {f2:6}")
         tsize += sz
-    p += (i)*entrysz
+        p += entrysz
+        if p + entrysz > data_from:
+            break
     print(f"position {p}")
     print(f"total outsize {tsize}")
     # print("head of buffer")
@@ -46,6 +48,8 @@ iso.open(sys.argv[1])
 for child in iso.list_children(iso_path='/'):
     print(child.file_identifier())
 for child in iso.list_children(iso_path='/Z/'):
+    print(child.file_identifier())
+for child in iso.list_children(iso_path='/CUTS/'):
     print(child.file_identifier())
 
 
