@@ -1,17 +1,22 @@
-import sys
-import pycdlib
-from io import BytesIO
+import os
 import struct
+import sys
+from collections import namedtuple
+from io import BytesIO
 
-PAC_ENTRY = struct.Struct('<BLL12sHHL')
-def print_installer_pac(v: bytes):
+import pycdlib
+
+PAC_ENTRY = struct.Struct("<BLL12sHHL")
+
+
+def print_installer_pac(v: bytes, fn: str):
     p = 0x80 - 8
     entrysz = 29
     data_from = 99999999
     tsize = 0
     for i in range(400):
-        r = v[p:p+entrysz]
-        flg,offset,typ,nameb,f1,f2,sz = PAC_ENTRY.unpack_from(r, 0)
+        r = v[p : p + entrysz]
+        flg, offset, typ, nameb, f1, f2, sz = PAC_ENTRY.unpack_from(r, 0)
         name = nameb.decode()
         if offset < data_from:
             data_from = offset
@@ -27,42 +32,103 @@ def print_installer_pac(v: bytes):
     # print(v[p:p+1000])
 
 
-def print_game_pac(v: bytes) -> None:
+def print_game_pac(v: bytes, fn: str) -> None:
     assert v[0:5] == bytes.fromhex("00000000FF")
     assert v[-4:] == b"JMP2"
     entries = struct.unpack("<L", v[-8:-4])[0]
     entrysz = 24
-    s = len(v) - 8 - entries*entrysz
+    s = len(v) - 8 - entries * entrysz
     print(f" entries {entries} sz {len(v)} s {s}")
     for i in range(entries):
-        r = v[s:s+entrysz]
+        r = v[s : s + entrysz]
         s += entrysz
-        name, flags, s1, s2 = struct.unpack('<12sLLL', r)
+        name, flags, s1, s2 = struct.unpack("<12sLLL", r)
         assert flags == 0
         name = name.rstrip(b"\x00")
         print(f"  {name.decode():12} {flags:4} {s1:8} {s2:8}")
-
-iso = pycdlib.PyCdlib()
-iso.open(sys.argv[1])
-
-for child in iso.list_children(iso_path='/'):
-    print(child.file_identifier())
-for child in iso.list_children(iso_path='/Z/'):
-    print(child.file_identifier())
-for child in iso.list_children(iso_path='/CUTS/'):
-    print(child.file_identifier())
 
 
 def check_file(func, iso, iso_path):
     print(iso_path)
     extracted = BytesIO()
     iso.get_file_from_iso_fp(extracted, iso_path=iso_path)
-    func(extracted.getvalue())
+    func(extracted.getvalue(), iso_path.rstrip(";1").replace("/", "-")[1:].lower())
 
-check_file(print_installer_pac, iso, '/Z.PAC;1')
-check_file(print_game_pac, iso, '/Z/MAIN.PAC;1')
-check_file(print_game_pac, iso, '/Z/HEADFX.PAC;1')
-check_file(print_game_pac, iso, '/Z/SHEADFX.PAC;1')
-check_file(print_game_pac, iso, '/Z/WARDATA.PAC;1')
 
-iso.close()
+JV_FILEHEADER = struct.Struct("<2sBB76sHHHHLLBB6x")
+assert JV_FILEHEADER.size == 104
+JV_TABLE_ENTRY = struct.Struct("<LLLBBBx")
+assert JV_TABLE_ENTRY.size == 16
+
+JVFileHeader = namedtuple(
+    "JVFileHeader", "jv pm1 pm2 copy w h frames fdelay maxchunk freq flags vol"
+)
+JVTableEntry = namedtuple(
+    "JVTableEntry", "chunksz audiosz videosz palette audiotype videotype"
+)
+
+
+def print_jv(v: bytes, fn: str) -> None:
+    header = b" Compression by John M Phillips Copyright (C) 1995 The Bitmap Brothers Ltd.\x00"
+
+    jv = JVFileHeader._make(JV_FILEHEADER.unpack_from(v, 0))
+    assert jv.jv == b"JV"
+    assert jv.copy == header
+    print(
+        f"  JV header w{jv.w:3} x h{jv.h} frames {jv.frames} rate {jv.fdelay}ms chunk {jv.maxchunk} afreq {jv.freq}"
+    )
+    s = JV_FILEHEADER.size
+
+    # read 'tables'
+    entry = []
+    for i in range(jv.frames):
+        tentry = JVTableEntry._make(JV_TABLE_ENTRY.unpack_from(v, s))
+        s += JV_TABLE_ENTRY.size
+        entry.append(tentry)
+        assert tentry.audiotype == 0
+        print(tentry)
+        assert tentry.chunksz == tentry.audiosz + tentry.videosz + 768 * tentry.palette
+        assert tentry.chunksz > 0
+
+    # read chunks
+    # palette is 256*3 ie 8-bit indexed RGB
+    chunks = []
+    for tentry in entry:
+        audio = v[s : s + tentry.audiosz]
+        s += tentry.audiosz
+        psz = 768 * tentry.palette
+        palette = v[s : s + psz]
+        s += psz
+        video = v[s : s + tentry.videosz]
+        s += tentry.videosz
+        chunks.append((audio, palette, video))
+
+    assert len(v) == s
+    audio = b"".join([c[0] for c in chunks])
+    with open(f"out/{fn}.pcm_u8", "wb") as w:
+        w.write(audio)
+
+
+if __name__ == "__main__":
+    iso = pycdlib.PyCdlib()
+    iso.open(sys.argv[1])
+    os.makedirs("out", exist_ok=True)
+
+    for child in iso.list_children(iso_path="/"):
+        print(child.file_identifier())
+    for child in iso.list_children(iso_path="/Z/"):
+        print(child.file_identifier())
+
+    check_file(print_installer_pac, iso, "/Z.PAC;1")
+    check_file(print_game_pac, iso, "/Z/MAIN.PAC;1")
+    check_file(print_game_pac, iso, "/Z/HEADFX.PAC;1")
+    check_file(print_game_pac, iso, "/Z/SHEADFX.PAC;1")
+    check_file(print_game_pac, iso, "/Z/WARDATA.PAC;1")
+
+    for child in iso.list_children(iso_path="/CUTS/"):
+        print(child.file_identifier())
+        if child.file_identifier().startswith(b"."):
+            continue
+        check_file(print_jv, iso, "/CUTS/" + child.file_identifier().decode())
+
+    iso.close()
