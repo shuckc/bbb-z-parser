@@ -2,3 +2,5 @@ venv
 *.iso
 *.cdr
 out
+*.pyc
+__pycache__
