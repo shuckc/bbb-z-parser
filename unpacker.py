@@ -133,7 +133,7 @@ def print_jv(v: bytes, fn: str) -> None:
     ims = []
 
     for entry, (a, p, v) in zip(entry, chunks):
-        print(f"decoding frame")
+        print("decoding frame")
         if p:
             palette = p
             assert len(palette) == 768
@@ -156,9 +156,9 @@ def print_jv(v: bytes, fn: str) -> None:
                 try:
                     for r in range(0, jv.h, 8):
                         for c in range(0, jv.w, 8):
-                                bitstr_decode8x8(d, pix_index, r*jv.w + c, jv)
+                            bitstr_decode8x8(d, pix_index, r * jv.w + c, jv)
                 except IndexError:
-                    print('frame corrupted')
+                    print("frame corrupted")
                     ok = False
 
                 print(f"plotting {d.remain()}")
@@ -166,59 +166,64 @@ def print_jv(v: bytes, fn: str) -> None:
                 # unpack pix_index -> rgb_index using palette
 
                 for i in range(pixels):
-                    rgb_index[i*3 + 0] = palette[pix_index[i]*3 + 0]
-                    rgb_index[i*3 + 1] = palette[pix_index[i]*3 + 1]
-                    rgb_index[i*3 + 2] = palette[pix_index[i]*3 + 2]
+                    rgb_index[i * 3 + 0] = palette[pix_index[i] * 3 + 0]
+                    rgb_index[i * 3 + 1] = palette[pix_index[i] * 3 + 1]
+                    rgb_index[i * 3 + 2] = palette[pix_index[i] * 3 + 2]
 
                 ar = numpy.array(rgb_index).reshape((jv.h, jv.w, 3))
                 ims.append(ar)
 
     with open(f"out/{fn}.mp4", "wb") as w:
         # w.write(audio)
-        imageio.mimwrite(w, ims, fps=int(1/jv.fdelay), format="mp4")
+        imageio.mimwrite(w, ims, fps=int(1 / (jv.fdelay/1000.0)), format="mp4")
+
+    # multiplex
+    # cmd = 'ffmpeg -y -i Audio.wav  -r 30 -i Video.h264 -filter:a aresample=async=1 -c:a flac -c:v copy av.mkv'
+    # subprocess.call(cmd, shell=True)
+    # print('Muxing Done')
 
 
 def bitstr_decode2x2(bitit, dest, idx, jv):
     mark = bitit.read_bit2()
-    #print(f"   in 2x2 {idx} mark {mark} bi {bitit}")
+    # print(f"   in 2x2 {idx} mark {mark} bi {bitit}")
 
     if mark == 0:
         # this 2x2 square is unchanged, return
         pass
     elif mark == 1:
         # set 4 pixels all same colour
-        idx = bitit.read_bit8()
+        p8 = bitit.read_bit8()
         for r in range(2):
             for c in range(2):
-                dest[idx+c+ r*jv.w] = idx
+                dest[idx + r * jv.w + c] = p8
     elif mark == 2:
         # read two different colour indexes (c0,c1), followed by
         # 4 single bits (one per pixel) to nominate c0 or c1
         c0c1 = [bitit.read_bit8(), bitit.read_bit8()]
         for r in range(2):
             for c in range(2):
-                dest[idx+r*jv.w + c] = c0c1[bitit.read_bit1()]
+                dest[idx + r * jv.w + c] = c0c1[bitit.read_bit1()]
 
     elif mark == 3:
         # copy 4 indexes
         for r in range(2):
             for c in range(2):
-                origin = idx+r*jv.w+c
+                origin = idx + r * jv.w + c
                 dest[origin] = bitit.read_bit8()
 
 
 def bitstr_decode4x4(bitit, dest, idx, jv):
     mark = bitit.read_bit2()
-    #print(f"  in 4x4 {idx} mark {mark} bi {bitit}")
+    # print(f"  in 4x4 {idx} mark {mark} bi {bitit}")
     if mark == 0:
         # this 4x4 square is unchanged, return
         pass
     elif mark == 1:
         # set 16 pixels all same colour
-        idx = bitit.read_bit8()
+        p8 = bitit.read_bit8()
         for r in range(4):
             for c in range(4):
-                dest[idx+c+ r*jv.w] = idx
+                dest[idx + r * jv.w + c] = p8
     elif mark == 2:
         # read two different colour indexes (c0,c1), followed by
         # 16 single bits (one per pixel) to nominate c0 or c1
@@ -226,43 +231,42 @@ def bitstr_decode4x4(bitit, dest, idx, jv):
         for r in reversed(range(4)):
             # TODO: c-iter ordering bitstream.cpp:123 looks odd here
             for c in range(4):
-                dest[idx+r*jv.w + c] = c0c1[bitit.read_bit1()]
+                dest[idx + r * jv.w + c] = c0c1[bitit.read_bit1()]
 
     elif mark == 3:
         # decompose the 4x4 into 4 tiles of 2x2
         for r in range(0, 4, 2):
             for c in range(0, 4, 2):
-                origin = idx+r*jv.w+c
+                origin = idx + r * jv.w + c
                 bitstr_decode2x2(bitit, dest, origin, jv)
 
 
 def bitstr_decode8x8(bitit, dest, idx, jv):
     mark = bitit.read_bit2()
-    #print(f" in 8x8 {idx} mark {mark} bi {bitit}")
+    # print(f" in 8x8 {idx} mark {mark} bi {bitit}")
     if mark == 0:
         # this 8x8 square is unchanged, return
         pass
     elif mark == 1:
         # set 64 pixels all same colour
-        idx = bitit.read_bit8()
+        p8 = bitit.read_bit8()
         for r in range(8):
             for c in range(8):
-                dest[idx+c+ r*jv.w] = idx
+                dest[idx + r * jv.w + c] = p8
     elif mark == 2:
         # read two different colour indexes (c0,c1), followed by
         # 64 single bits (one per pixel) to nominate c0 or c1
         c0c1 = [bitit.read_bit8(), bitit.read_bit8()]
         for r in reversed(range(8)):
             for c in range(8):
-                dest[idx+r*jv.w + c] = c0c1[bitit.read_bit1()]
+                dest[idx + r * jv.w + c] = c0c1[bitit.read_bit1()]
 
     elif mark == 3:
         # decompose the 8x8 into 4 tiles of 4x4
         for r in range(0, 8, 4):
             for c in range(0, 8, 4):
-                origin = idx+r*jv.w+c
+                origin = idx + r * jv.w + c
                 bitstr_decode4x4(bitit, dest, origin, jv)
-
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ class BitIterator:
         # return 0..255
         if self.remain() < 8:
             raise IndexError()
-        r = (self._get_8() & 0xFF)
+        r = self._get_8() & 0xFF
         self.bit_position += 8
         return r
 
